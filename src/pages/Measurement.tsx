@@ -339,7 +339,7 @@ const Measurement: React.FC = () => {
             className="card"
           >
             <h3 className="text-lg font-semibold mb-4 flex items-center text-blue-900">
-              <Info className="mr-2 text-blue-600" />
+              <Info className="mr-2" size={20} />
               Photo Guidelines
             </h3>
             <div className="space-y-3 text-sm">
