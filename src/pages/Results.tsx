@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { useMeasurement } from '../context/MeasurementContext';
+import SizeGuide from '../components/SizeGuide';
+import { GARMENTS } from '../lib/sizing';
 import { 
   Ruler, 
   ShoppingBag, 
@@ -17,7 +19,7 @@ import {
 } from 'lucide-react';
 
 const Results: React.FC = () => {
-  const { currentMeasurement } = useMeasurement();
+  const { currentMeasurement, setMeasurements, preferences } = useMeasurement();
   const navigate = useNavigate();
   const [showAnnotatedImage, setShowAnnotatedImage] = useState(false);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
@@ -155,11 +157,13 @@ const Results: React.FC = () => {
         <div className="flex items-center justify-center mb-4">
           <CheckCircle className="text-green-500 mr-3" size={32} />
           <h1 className="text-4xl font-bold text-gray-900">
-            AI Measurement Complete!
+            {currentMeasurement.source === 'manual' ? 'Your Measurements' : 'AI Measurement Complete!'}
           </h1>
         </div>
         <p className="text-xl text-gray-600">
-          Here are your AI-calculated body measurements with pose detection analysis
+          {currentMeasurement.source === 'manual'
+            ? 'Sizes calculated from the measurements you entered'
+            : 'Here are your AI-calculated body measurements with pose detection analysis'}
         </p>
       </motion.div>
 
@@ -228,7 +232,7 @@ const Results: React.FC = () => {
           >
             <h2 className="text-2xl font-semibold mb-6 flex items-center">
               <Ruler className="mr-3 text-primary-600" />
-              Your AI Measurements
+              {currentMeasurement.source === 'manual' ? 'Your Measurements' : 'Your AI Measurements'}
             </h2>
             
             <div className="grid md:grid-cols-2 gap-4">
@@ -318,11 +322,8 @@ const Results: React.FC = () => {
               {currentMeasurement.recommended_size}
             </div>
             <p className="text-gray-600 mb-4">
-              Based on your AI measurements, this size should provide the best fit.
+              Your T-shirt / top size. See the size guide below for other garments.
             </p>
-            <button className="btn-primary w-full">
-              Shop Now
-            </button>
           </motion.div>
 
           {/* Accuracy Information */}
@@ -339,7 +340,7 @@ const Results: React.FC = () => {
             <div className="space-y-3 text-sm text-gray-600">
               <div className="flex items-start">
                 <div className="w-2 h-2 bg-yellow-600 rounded-full mt-2 mr-3 flex-shrink-0"></div>
-                <p>AI measurements have ±2-3cm accuracy range</p>
+                <p>Photo estimates are approximate (a few cm off is normal); a tape measure is more reliable</p>
               </div>
               <div className="flex items-start">
                 <div className="w-2 h-2 bg-yellow-600 rounded-full mt-2 mr-3 flex-shrink-0"></div>
@@ -363,36 +364,24 @@ const Results: React.FC = () => {
             transition={{ delay: 0.4 }}
             className="card"
           >
-            <h3 className="text-lg font-semibold mb-4">Size Chart Reference</h3>
+            <h3 className="text-lg font-semibold mb-4">Size Chart Reference (chest)</h3>
             <div className="space-y-2 text-sm">
-              <div className="flex justify-between py-1 border-b border-gray-100">
-                <span>XS</span>
-                <span>70-85 cm</span>
-              </div>
-              <div className="flex justify-between py-1 border-b border-gray-100">
-                <span>S</span>
-                <span>85-92 cm</span>
-              </div>
-              <div className="flex justify-between py-1 border-b border-gray-100">
-                <span>M</span>
-                <span>92-100 cm</span>
-              </div>
-              <div className="flex justify-between py-1 border-b border-gray-100">
-                <span>L</span>
-                <span>100-108 cm</span>
-              </div>
-              <div className="flex justify-between py-1 border-b border-gray-100">
-                <span>XL</span>
-                <span>108-116 cm</span>
-              </div>
-              <div className="flex justify-between py-1">
-                <span>XXL</span>
-                <span>116+ cm</span>
-              </div>
+              {(GARMENTS[0].charts[preferences.gender] ?? []).map((row) => (
+                <div key={row.label} className="flex justify-between py-1 border-b border-gray-100 last:border-0">
+                  <span>{row.label}</span>
+                  <span>{row.chest ? `${row.chest[0]}-${row.chest[1]} cm` : ''}</span>
+                </div>
+              ))}
             </div>
           </motion.div>
         </div>
       </div>
+      <SizeGuide
+        body={currentMeasurement}
+        gender={preferences.gender}
+        fit={preferences.fit}
+        onUnderbustChange={(underbust) => setMeasurements({ ...currentMeasurement, underbust })}
+      />
     </div>
   );
 };

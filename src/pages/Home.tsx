@@ -222,7 +222,7 @@ const Home: React.FC = () => {
               Ready to Get Started?
             </h2>
             <p className="text-xl text-white/90 mb-8">
-              Join thousands of users who trust SmartMeasure for accurate body measurements.
+              Get your measurements and find your size across garments.
             </p>
             <Link
               to="/measurement"

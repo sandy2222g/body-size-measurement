@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { Camera, Upload, User, Ruler, AlertCircle, CheckCircle, Info } from 'lucide-react';
 import { useMeasurement } from '../context/MeasurementContext';
 import { useNavigate } from 'react-router-dom';
+import { GARMENTS, recommendSize, type Fit, type Gender } from '../lib/sizing';
 
 const Measurement: React.FC = () => {
   const [isCapturing, setIsCapturing] = useState(false);
@@ -14,7 +15,9 @@ const Measurement: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { setMeasurements } = useMeasurement();
+  const { setMeasurements, preferences, setPreferences } = useMeasurement();
+  const [mode, setMode] = useState<'photo' | 'manual'>('photo');
+  const [manual, setManual] = useState<Record<string, string>>({});
   const navigate = useNavigate();
 
   const streamRef = useRef<MediaStream | null>(null);
@@ -148,7 +151,8 @@ const Measurement: React.FC = () => {
             ...data.measurements,
             annotated_image: data.annotated_image,
             confidence_score: data.confidence_score,
-            processing_notes: data.processing_notes
+            processing_notes: data.processing_notes,
+            source: 'photo'
           });
           navigate('/results');
         }, 500));
@@ -163,6 +167,44 @@ const Measurement: React.FC = () => {
       setProcessingStep('');
     }
   }, [capturedImages, height, setMeasurements, navigate]);
+
+  const MANUAL_FIELDS: Array<{ key: string; label: string; hint: string; required: boolean; min: number; max: number }> = [
+    { key: 'chest', label: 'Chest / bust', hint: 'Around the fullest part', required: true, min: 60, max: 180 },
+    { key: 'waist', label: 'Waist', hint: 'Around the narrowest part', required: true, min: 45, max: 180 },
+    { key: 'hips', label: 'Hips', hint: 'Around the fullest part', required: true, min: 60, max: 190 },
+    { key: 'shoulder_width', label: 'Shoulder width', hint: 'Shoulder point to shoulder point', required: true, min: 25, max: 70 },
+    { key: 'arm_length', label: 'Arm length', hint: 'Shoulder to wrist', required: true, min: 40, max: 90 },
+    { key: 'inseam', label: 'Inseam', hint: 'Crotch to ankle', required: true, min: 50, max: 110 },
+    { key: 'underbust', label: 'Underbust (optional)', hint: 'Snug, directly under the bust; enables bra cup size', required: false, min: 55, max: 140 },
+  ];
+
+  const submitManual = useCallback((event: React.FormEvent) => {
+    event.preventDefault();
+    const values: Record<string, number> = {};
+    for (const f of MANUAL_FIELDS) {
+      const raw = manual[f.key];
+      if (!raw) {
+        if (f.required) { setError(`Please enter ${f.label.toLowerCase()}.`); return; }
+        continue;
+      }
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < f.min || n > f.max) {
+        setError(`${f.label} must be between ${f.min} and ${f.max} cm.`);
+        return;
+      }
+      values[f.key] = n;
+    }
+    setError(null);
+    setMeasurements({
+      chest: values.chest, waist: values.waist, hips: values.hips,
+      shoulder_width: values.shoulder_width, arm_length: values.arm_length, inseam: values.inseam,
+      recommended_size: recommendSize(GARMENTS[0], { chest: values.chest, waist: values.waist, hips: values.hips, shoulder_width: values.shoulder_width, arm_length: values.arm_length, inseam: values.inseam }, preferences.gender, preferences.fit)?.size ?? '',
+      underbust: values.underbust,
+      source: 'manual',
+    });
+    navigate('/results');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manual, preferences, setMeasurements, navigate]);
 
   const resetCapture = useCallback(() => {
     setCapturedImages([]);
@@ -204,9 +246,66 @@ const Measurement: React.FC = () => {
         </motion.div>
       )}
 
+      <div className="flex justify-center mb-6" role="tablist" aria-label="Input method">
+        {(['photo', 'manual'] as const).map((m) => (
+          <button
+            key={m}
+            role="tab"
+            aria-selected={mode === m}
+            onClick={() => { setMode(m); setError(null); }}
+            className={`px-5 py-2 first:rounded-l-lg last:rounded-r-lg border text-sm font-medium ${
+              mode === m ? 'bg-primary-600 text-white border-primary-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            {m === 'photo' ? 'Photo (AI)' : 'Manual entry'}
+          </button>
+        ))}
+      </div>
+
       <div className="grid lg:grid-cols-3 gap-8">
         {/* Camera/Upload Section */}
         <div className="lg:col-span-2">
+          {mode === 'manual' ? (
+          <motion.div
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            className="card"
+          >
+            <h2 className="text-2xl font-semibold mb-2 flex items-center">
+              <Ruler className="mr-3 text-primary-600" />
+              Enter Your Measurements
+            </h2>
+            <p className="text-gray-600 mb-6">
+              Use a soft tape measure (in cm). No photo needed — you will get the same size recommendations.
+            </p>
+            <form onSubmit={submitManual} className="grid sm:grid-cols-2 gap-4" noValidate>
+              {MANUAL_FIELDS.map((f) => (
+                <div key={f.key}>
+                  <label htmlFor={`m-${f.key}`} className="block text-sm font-medium text-gray-700 mb-1">{f.label}</label>
+                  <input
+                    id={`m-${f.key}`}
+                    type="number"
+                    inputMode="decimal"
+                    step="0.1"
+                    min={f.min}
+                    max={f.max}
+                    value={manual[f.key] ?? ''}
+                    onChange={(e) => setManual((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                    className="input-field"
+                    placeholder="cm"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">{f.hint}</p>
+                </div>
+              ))}
+              <div className="sm:col-span-2">
+                <button type="submit" className="btn-primary w-full flex items-center justify-center">
+                  <Ruler className="mr-2" size={20} />
+                  Get My Sizes
+                </button>
+              </div>
+            </form>
+          </motion.div>
+          ) : (
           <motion.div
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
@@ -308,6 +407,7 @@ const Measurement: React.FC = () => {
 
             <canvas ref={canvasRef} className="hidden" />
           </motion.div>
+          )}
         </div>
 
         {/* Settings and Guidelines Section */}
@@ -341,6 +441,36 @@ const Measurement: React.FC = () => {
                 Accurate height is crucial for precise measurements
               </p>
             </div>
+          </motion.div>
+
+          {/* Sizing preferences */}
+          <motion.div
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            className="card"
+          >
+            <h2 className="text-xl font-semibold mb-4">Sizing Preferences</h2>
+            <label htmlFor="pref-gender" className="block text-sm font-medium text-gray-700 mb-1">Size chart</label>
+            <select
+              id="pref-gender"
+              value={preferences.gender}
+              onChange={(e) => setPreferences({ ...preferences, gender: e.target.value as Gender })}
+              className="input-field mb-3"
+            >
+              <option value="female">Women's</option>
+              <option value="male">Men's</option>
+            </select>
+            <label htmlFor="pref-fit" className="block text-sm font-medium text-gray-700 mb-1">Preferred fit</label>
+            <select
+              id="pref-fit"
+              value={preferences.fit}
+              onChange={(e) => setPreferences({ ...preferences, fit: e.target.value as Fit })}
+              className="input-field"
+            >
+              <option value="slim">Slim / fitted</option>
+              <option value="regular">Regular</option>
+              <option value="relaxed">Relaxed / loose</option>
+            </select>
           </motion.div>
 
           {/* Enhanced Photo Guidelines */}
@@ -429,7 +559,7 @@ const Measurement: React.FC = () => {
               Measurement Accuracy
             </h3>
             <div className="space-y-2 text-sm text-green-800">
-              <p>• <strong>Expected accuracy:</strong> ±2-3cm for most measurements</p>
+              <p>• <strong>Estimates only:</strong> photo results can be a few cm off; use Manual entry for best accuracy</p>
               <p>• <strong>Best results:</strong> Follow photo guidelines carefully</p>
               <p>• <strong>Multiple attempts:</strong> Take several photos for comparison</p>
               <p>• <strong>Professional alternative:</strong> For critical fits, consider professional tailoring</p>
