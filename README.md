@@ -44,6 +44,14 @@ npm run typecheck && npm test && npx vite build
 python -m unittest discover -s tests      # MediaPipe is faked; Node tests cover the gateway
 ```
 
+## Measuring accuracy
+`tools/benchmark.py` runs the real pipeline over photos with tape-measured ground truth and
+prints MAE, bias and the share within 3 cm per metric:
+```bash
+python tools/benchmark.py benchmark/ground_truth.csv   # see benchmark/ground_truth.example.csv
+```
+No benchmark results are published yet — add your own tape-measured photos and run it before quoting an accuracy figure.
+
 ## Limitations (honest)
 - Photo-based circumferences are estimated from 2D widths; accuracy has **not** been validated against ground truth. Prefer manual entry for fitted garments.
 - Size charts are generic, not brand-specific. Cup size needs a manual underbust.
