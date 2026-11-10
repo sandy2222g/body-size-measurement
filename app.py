@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.exc import IntegrityError
 import cv2
 import mediapipe as mp
 import numpy as np
@@ -180,7 +181,7 @@ def get_body_measurements_enhanced(landmarks, image_width, image_height, height_
         avg_ankle_y = (left_ankle_y + right_ankle_y) / 2
         body_height_pixels = abs(avg_ankle_y - head_y)
         height_reference_points.append(body_height_pixels)
-    except:
+    except (IndexError, AttributeError):
         pass
     
     # Method 2: Hip to ankle (for validation)
@@ -195,7 +196,7 @@ def get_body_measurements_enhanced(landmarks, image_width, image_height, height_
         # Leg length is typically 45-50% of total height
         estimated_body_height = leg_length_pixels / 0.47
         height_reference_points.append(estimated_body_height)
-    except:
+    except (IndexError, AttributeError):
         pass
     
     if not height_reference_points:
@@ -207,29 +208,20 @@ def get_body_measurements_enhanced(landmarks, image_width, image_height, height_
     # CRITICAL: This is the key fix - proper pixel to cm conversion
     pixel_to_cm = height_cm / body_height_pixels
     
-    print(f"DEBUG: Body height in pixels: {body_height_pixels}")
-    print(f"DEBUG: User height: {height_cm}cm")
-    print(f"DEBUG: Pixel to cm ratio: {pixel_to_cm}")
-    
     # SHOULDER WIDTH - Direct measurement
     left_shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER]
     right_shoulder = landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER]
     shoulder_distance_pixels = calculate_distance_2d(left_shoulder, right_shoulder, image_width, image_height)
     measurements['shoulder_width'] = shoulder_distance_pixels * pixel_to_cm
     
-    print(f"DEBUG: Shoulder width pixels: {shoulder_distance_pixels}, cm: {measurements['shoulder_width']}")
-    
     # CHEST CIRCUMFERENCE - CORRECTED FORMULA
     # Based on your actual measurements: chest=103cm, shoulder=48cm
     # This suggests a ratio of approximately 2.15
     # Using a more conservative approach with anatomical accuracy
-    chest_width_cm = measurements['shoulder_width']
     
     # FIXED: Use a direct multiplier based on your actual measurements
     # Your chest (103cm) / shoulder (48cm) = 2.15 ratio
     measurements['chest'] = measurements['shoulder_width'] * 2.15
-    
-    print(f"DEBUG: Chest calculation: shoulder_width({measurements['shoulder_width']:.1f}) × 2.15 = {measurements['chest']:.1f}cm")
     
     # HIP MEASUREMENT - Direct measurement with circumference calculation
     left_hip = landmarks[mp_pose.PoseLandmark.LEFT_HIP]
@@ -241,8 +233,6 @@ def get_body_measurements_enhanced(landmarks, image_width, image_height, height_
     # Your hips (98cm) suggest a different ratio than the generic formula
     # Using hip width × 2.8 based on typical hip width to circumference ratio
     measurements['hips'] = hip_width_cm * 2.8
-    
-    print(f"DEBUG: Hip width: {hip_width_cm}, circumference: {measurements['hips']}")
     
     # WAIST - Anatomically positioned between chest and hips
     # Waist is typically 75-85% of hip measurement
@@ -259,7 +249,7 @@ def get_body_measurements_enhanced(landmarks, image_width, image_height, height_
             image_width, image_height
         )
         arm_measurements.append(left_arm_pixels * pixel_to_cm)
-    except:
+    except (IndexError, AttributeError):
         pass
     
     # Right arm
@@ -270,7 +260,7 @@ def get_body_measurements_enhanced(landmarks, image_width, image_height, height_
             image_width, image_height
         )
         arm_measurements.append(right_arm_pixels * pixel_to_cm)
-    except:
+    except (IndexError, AttributeError):
         pass
     
     if arm_measurements:
@@ -289,7 +279,7 @@ def get_body_measurements_enhanced(landmarks, image_width, image_height, height_
             image_width, image_height
         )
         inseam_measurements.append(left_inseam_pixels * pixel_to_cm)
-    except:
+    except (IndexError, AttributeError):
         pass
     
     # Right leg
@@ -300,7 +290,7 @@ def get_body_measurements_enhanced(landmarks, image_width, image_height, height_
             image_width, image_height
         )
         inseam_measurements.append(right_inseam_pixels * pixel_to_cm)
-    except:
+    except (IndexError, AttributeError):
         pass
     
     if inseam_measurements:
@@ -313,12 +303,6 @@ def get_body_measurements_enhanced(landmarks, image_width, image_height, height_
     measurements['symmetry_score'] = symmetry_score
     measurements['pixel_to_cm_ratio'] = pixel_to_cm
     
-    # Debug output
-    print(f"FINAL MEASUREMENTS:")
-    print(f"Chest: {measurements['chest']:.1f}cm")
-    print(f"Waist: {measurements['waist']:.1f}cm") 
-    print(f"Hips: {measurements['hips']:.1f}cm")
-    print(f"Shoulders: {measurements['shoulder_width']:.1f}cm")
     
     return measurements
 
@@ -390,19 +374,22 @@ def index():
 
 @app.route('/api/users', methods=['POST'])
 def create_user():
-    data = request.json
-    user = User(
-        name=data['name'],
-        email=data['email'],
-        height=data.get('height')
-    )
+    data = request.get_json(silent=True) or {}
+    name, email = data.get('name'), data.get('email')
+    if not name or not email:
+        return jsonify({'error': 'Name and email are required'}), 400
+    user = User(name=name, email=email, height=data.get('height'))
     db.session.add(user)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': 'Email already exists'}), 400
     return jsonify({'id': user.id, 'message': 'User created successfully'})
 
 @app.route('/api/users/<int:user_id>', methods=['GET'])
 def get_user(user_id):
-    user = User.query.get_or_404(user_id)
+    user = db.get_or_404(User, user_id)
     return jsonify({
         'id': user.id,
         'name': user.name,
@@ -411,124 +398,147 @@ def get_user(user_id):
         'created_at': user.created_at.isoformat()
     })
 
+MEASURE_KEYS = ['chest', 'waist', 'hips', 'shoulder_width', 'arm_length', 'inseam']
+MAX_IMAGES = 3
+
+NO_POSE_MESSAGE = (
+    'No pose detected in image. Please ensure:\n'
+    '• Your full body is visible in the frame\n'
+    '• You are standing straight facing the camera\n'
+    '• The lighting is good and background is clear\n'
+    '• You are wearing fitted clothing\n'
+    '• You are 2-3 meters away from the camera'
+)
+
+
+class ImageError(ValueError):
+    """Raised when an uploaded image cannot be used for measurement."""
+
+
+def decode_image(data_url):
+    """Decode a base64 data URL (or raw base64 string) into an OpenCV BGR image."""
+    if not isinstance(data_url, str) or not data_url:
+        raise ImageError('Invalid image format. Please upload a valid image.')
+    payload = data_url.split(',', 1)[1] if data_url.startswith('data:') else data_url
+    try:
+        image = Image.open(io.BytesIO(base64.b64decode(payload))).convert('RGB')
+    except Exception:
+        raise ImageError('Invalid image format. Please upload a valid image.')
+    if image.width < 300 or image.height < 400:
+        raise ImageError('Image resolution too low. Please use a higher quality image (minimum 300x400 pixels).')
+    return cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+
+
+def measure_image(image_cv, user_height):
+    """Run pose detection on one image. Returns (measurements, annotated_data_url)."""
+    results = pose.process(preprocess_image(image_cv))
+    if not results.pose_landmarks:
+        raise ImageError(NO_POSE_MESSAGE)
+
+    height, width = image_cv.shape[:2]
+    measurements = get_body_measurements_enhanced(
+        results.pose_landmarks.landmark, width, height, user_height
+    )
+
+    annotated = image_cv.copy()
+    mp_drawing.draw_landmarks(
+        annotated,
+        results.pose_landmarks,
+        mp_pose.POSE_CONNECTIONS,
+        landmark_drawing_spec=mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=3),
+        connection_drawing_spec=mp_drawing.DrawingSpec(color=(255, 0, 0), thickness=2)
+    )
+    cv2.putText(annotated, f"Confidence: {measurements['confidence_score']:.2f}",
+                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    cv2.putText(annotated, f"Symmetry: {measurements['symmetry_score']:.2f}",
+                (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    ok, buffer = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    if not ok:
+        raise RuntimeError('Failed to encode annotated image')
+    data_url = 'data:image/jpeg;base64,' + base64.b64encode(buffer).decode('utf-8')
+    return measurements, data_url
+
+
+def aggregate_measurements(per_image):
+    """Median-combine measurements from several photos (robust to one bad shot)."""
+    combined = {k: round(float(np.median([m[k] for m in per_image])), 1) for k in MEASURE_KEYS}
+    combined['confidence_score'] = float(np.mean([m['confidence_score'] for m in per_image]))
+    combined['symmetry_score'] = float(np.mean([m['symmetry_score'] for m in per_image]))
+    return combined
+
+
+@app.route('/api/health')
+def health():
+    return jsonify({'status': 'OK'})
+
+
 @app.route('/api/measure', methods=['POST'])
 def process_measurement():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': 'Image data is required'}), 400
+
+    # Accept either `images` (list, used by the frontend) or legacy single `image`.
+    images = data.get('images')
+    if images is None and data.get('image'):
+        images = [data['image']]
+    if not isinstance(images, list) or not images:
+        return jsonify({'error': 'At least one image is required'}), 400
+    if len(images) > MAX_IMAGES:
+        return jsonify({'error': f'You can submit at most {MAX_IMAGES} images.'}), 400
+
+    user_height = data.get('height', 170)
+    if isinstance(user_height, bool) or not isinstance(user_height, (int, float)) \
+            or not 100 <= user_height <= 250:
+        return jsonify({'error': 'Please provide a valid height between 100-250 cm'}), 400
+
     try:
-        data = request.json
-        
-        if not data or 'image' not in data:
-            return jsonify({'error': 'Image data is required'}), 400
-        
-        image_data = data['image'].split(',')[1]
-        user_height = data.get('height', 170)
-        
-        # Enhanced input validation
-        if not isinstance(user_height, (int, float)) or user_height < 100 or user_height > 250:
-            return jsonify({'error': 'Please provide a valid height between 100-250 cm'}), 400
-        
-        # Decode and validate image
-        try:
-            image_bytes = base64.b64decode(image_data)
-            image = Image.open(io.BytesIO(image_bytes))
-            
-            # Check image dimensions
-            if image.width < 300 or image.height < 400:
-                return jsonify({'error': 'Image resolution too low. Please use a higher quality image (minimum 300x400 pixels).'}), 400
-            
-            image_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-        except Exception as e:
-            return jsonify({'error': 'Invalid image format. Please upload a valid image.'}), 400
-        
-        # Enhanced image preprocessing
-        processed_image = preprocess_image(image_cv)
-        
-        # Process with MediaPipe
-        results = pose.process(processed_image)
-        
-        if not results.pose_landmarks:
-            return jsonify({
-                'error': 'No pose detected in image. Please ensure:\n' +
-                        '• Your full body is visible in the frame\n' +
-                        '• You are standing straight facing the camera\n' +
-                        '• The lighting is good and background is clear\n' +
-                        '• You are wearing fitted clothing\n' +
-                        '• You are 2-3 meters away from the camera'
-            }), 400
-        
-        # Enhanced measurement calculation
-        try:
-            height, width = image_cv.shape[:2]
-            measurements = get_body_measurements_enhanced(
-                results.pose_landmarks.landmark, 
-                width, 
-                height, 
-                user_height
-            )
-            
-            # Enhanced size recommendation
-            recommended_size, size_confidence = recommend_size_enhanced(measurements)
-            measurements['recommended_size'] = recommended_size
-            measurements['size_confidence'] = size_confidence
-            
-            # Create enhanced annotated image
-            annotated_image = image_cv.copy()
-            
-            # Draw pose landmarks with custom styling
-            mp_drawing.draw_landmarks(
-                annotated_image,
-                results.pose_landmarks,
-                mp_pose.POSE_CONNECTIONS,
-                landmark_drawing_spec=mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=3),
-                connection_drawing_spec=mp_drawing.DrawingSpec(color=(255, 0, 0), thickness=2)
-            )
-            
-            # Add measurement annotations
-            cv2.putText(annotated_image, f"Confidence: {measurements['confidence_score']:.2f}", 
-                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(annotated_image, f"Symmetry: {measurements['symmetry_score']:.2f}", 
-                       (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            
-            # Convert to base64
-            _, buffer = cv2.imencode('.jpg', annotated_image, [cv2.IMWRITE_JPEG_QUALITY, 95])
-            annotated_base64 = base64.b64encode(buffer).decode('utf-8')
-            annotated_data_url = f"data:image/jpeg;base64,{annotated_base64}"
-            
-            # Clean up measurements for response (remove internal metrics)
-            response_measurements = {k: v for k, v in measurements.items() 
-                                   if k not in ['confidence_score', 'symmetry_score', 'pixel_to_cm_ratio', 'size_confidence']}
-            
-            return jsonify({
-                'measurements': response_measurements,
-                'landmarks_detected': True,
-                'annotated_image': annotated_data_url,
-                'confidence_score': measurements['confidence_score'],
-                'symmetry_score': measurements['symmetry_score'],
-                'size_confidence': measurements['size_confidence'],
-                'processing_notes': f'Corrected chest measurement formula: shoulder_width × 2.15. Expected accuracy: ±3cm for chest measurements.'
-            })
-            
-        except ValueError as ve:
-            return jsonify({'error': str(ve)}), 400
-        except Exception as e:
-            app.logger.error(f'Measurement calculation error: {str(e)}')
-            return jsonify({'error': f'Measurement calculation failed: {str(e)}'}), 500
-        
-    except Exception as e:
-        app.logger.error(f'Measurement processing error: {str(e)}')
+        per_image = []
+        annotated_image = None
+        for idx, raw in enumerate(images, start=1):
+            try:
+                m, annotated = measure_image(decode_image(raw), user_height)
+            except ValueError as ve:
+                suffix = f' (photo {idx})' if len(images) > 1 else ''
+                return jsonify({'error': f'{ve}{suffix}'}), 400
+            per_image.append(m)
+            annotated_image = annotated_image or annotated
+
+        measurements = aggregate_measurements(per_image)
+        recommended_size, size_confidence = recommend_size_enhanced(measurements)
+
+        response_measurements = {k: measurements[k] for k in MEASURE_KEYS}
+        response_measurements['recommended_size'] = recommended_size
+        return jsonify({
+            'measurements': response_measurements,
+            'landmarks_detected': True,
+            'annotated_image': annotated_image,
+            'confidence_score': measurements['confidence_score'],
+            'symmetry_score': measurements['symmetry_score'],
+            'size_confidence': size_confidence,
+            'images_processed': len(per_image),
+            'processing_notes': (
+                f'Median of {len(per_image)} photo(s). Chest estimated as shoulder width × 2.15; '
+                'estimates are approximate (typically ±3cm).'
+            ),
+        })
+    except Exception:
+        app.logger.exception('Measurement processing error')
         return jsonify({'error': 'Internal server error. Please try again.'}), 500
+
 
 @app.route('/api/measurements', methods=['POST'])
 def save_measurement():
-    data = request.json
+    data = request.get_json(silent=True) or {}
+    m = data.get('measurements')
+    if not data.get('user_id') or not isinstance(m, dict):
+        return jsonify({'error': 'User ID and measurements are required'}), 400
+    if db.session.get(User, data['user_id']) is None:
+        return jsonify({'error': 'User not found'}), 404
     measurement = Measurement(
         user_id=data['user_id'],
-        chest=data['measurements']['chest'],
-        waist=data['measurements']['waist'],
-        hips=data['measurements']['hips'],
-        shoulder_width=data['measurements']['shoulder_width'],
-        arm_length=data['measurements']['arm_length'],
-        inseam=data['measurements']['inseam'],
-        recommended_size=data['measurements']['recommended_size']
+        recommended_size=m.get('recommended_size'),
+        **{k: m.get(k) for k in MEASURE_KEYS}
     )
     db.session.add(measurement)
     db.session.commit()
@@ -552,4 +562,8 @@ def get_user_measurements(user_id):
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(
+        debug=os.environ.get('FLASK_DEBUG') == '1',
+        host=os.environ.get('HOST', '127.0.0.1'),
+        port=int(os.environ.get('PORT', 5001)),
+    )

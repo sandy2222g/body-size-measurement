@@ -47,10 +47,14 @@ const Profile: React.FC = () => {
     // Load profile from localStorage or create new one
     const savedProfile = localStorage.getItem('userProfile');
     if (savedProfile) {
-      const parsedProfile = JSON.parse(savedProfile);
-      setProfile(parsedProfile);
-      setHasProfile(true);
-      loadMeasurements(parsedProfile.id);
+      try {
+        const parsedProfile = JSON.parse(savedProfile);
+        setProfile(parsedProfile);
+        setHasProfile(true);
+        loadMeasurements(parsedProfile.id);
+      } catch {
+        localStorage.removeItem('userProfile');
+      }
     }
   }, []);
 

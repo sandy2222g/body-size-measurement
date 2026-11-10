@@ -1,6 +1,5 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { motion } from 'framer-motion';
 import { Ruler, Home, Camera, BarChart3, User } from 'lucide-react';
 
 const Header: React.FC = () => {

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Camera, Upload, User, Ruler, AlertCircle, CheckCircle, Info } from 'lucide-react';
 import { useMeasurement } from '../context/MeasurementContext';
@@ -17,33 +17,45 @@ const Measurement: React.FC = () => {
   const { setMeasurements } = useMeasurement();
   const navigate = useNavigate();
 
+  const streamRef = useRef<MediaStream | null>(null);
+
+  const stopCamera = useCallback(() => {
+    streamRef.current?.getTracks().forEach(track => track.stop());
+    streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+    setIsCapturing(false);
+  }, []);
+
   const startCamera = useCallback(async () => {
     try {
       setError(null);
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { 
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
           width: { ideal: 1280 },
           height: { ideal: 720 },
           facingMode: 'user'
-        } 
+        }
       });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        setIsCapturing(true);
-      }
+      streamRef.current = stream;
+      // The <video> element only mounts once isCapturing is true; the effect below attaches the stream.
+      setIsCapturing(true);
     } catch (error) {
       console.error('Error accessing camera:', error);
       setError('Unable to access camera. Please check permissions and try again.');
     }
   }, []);
 
-  const stopCamera = useCallback(() => {
-    if (videoRef.current?.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach(track => track.stop());
-      videoRef.current.srcObject = null;
-      setIsCapturing(false);
+  useEffect(() => {
+    if (isCapturing && videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
     }
+  }, [isCapturing]);
+
+  // Release the camera and pending timers when leaving the page.
+  const timersRef = useRef<number[]>([]);
+  useEffect(() => () => {
+    streamRef.current?.getTracks().forEach(track => track.stop());
+    timersRef.current.forEach(window.clearTimeout);
   }, []);
 
   const capturePhoto = useCallback(() => {
@@ -104,7 +116,7 @@ const Measurement: React.FC = () => {
     if (capturedImages.length === 0) return;
 
     // Validate height input
-    if (height < 100 || height > 250) {
+    if (!Number.isFinite(height) || height < 100 || height > 250) {
       setError('Please enter a valid height between 100-250 cm.');
       return;
     }
@@ -114,7 +126,7 @@ const Measurement: React.FC = () => {
     setProcessingStep('Analyzing image...');
 
     try {
-      setTimeout(() => setProcessingStep('Detecting pose landmarks...'), 1000);
+      timersRef.current.push(window.setTimeout(() => setProcessingStep('Detecting pose landmarks...'), 1000));
       
       const response = await fetch('/api/measure', {
         method: 'POST',
@@ -127,11 +139,11 @@ const Measurement: React.FC = () => {
         })
       });
 
-      const data = await response.json();
-      
+      const data = await response.json().catch(() => ({}));
+
       if (response.ok) {
         setProcessingStep('Calculating measurements...');
-        setTimeout(() => {
+        timersRef.current.push(window.setTimeout(() => {
           setMeasurements({
             ...data.measurements,
             annotated_image: data.annotated_image,
@@ -139,7 +151,7 @@ const Measurement: React.FC = () => {
             processing_notes: data.processing_notes
           });
           navigate('/results');
-        }, 500);
+        }, 500));
       } else {
         setError(data.error || 'Failed to process measurement');
       }

@@ -4,7 +4,6 @@ import { useNavigate } from 'react-router-dom';
 import { useMeasurement } from '../context/MeasurementContext';
 import { 
   Ruler, 
-  User, 
   ShoppingBag, 
   Download, 
   Share2, 

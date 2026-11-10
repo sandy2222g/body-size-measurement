@@ -1,10 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const multer = require('multer');
 const sqlite3 = require('sqlite3').verbose();
-const { v4: uuidv4 } = require('uuid');
-const path = require('path');
-const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -13,24 +9,6 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-
-// Create uploads directory if it doesn't exist
-const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir);
-}
-
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsDir);
-  },
-  filename: (req, file, cb) => {
-    cb(null, `${uuidv4()}-${file.originalname}`);
-  }
-});
-
-const upload = multer({ storage });
 
 // Initialize SQLite database
 const db = new sqlite3.Database('./measurements.db');
@@ -62,32 +40,8 @@ db.serialize(() => {
   )`);
 });
 
-// Mock measurement calculation (since we can't use MediaPipe/OpenCV)
-function calculateMockMeasurements(height = 170) {
-  // Generate realistic measurements based on height
-  const baseRatio = height / 170; // Normalize to average height
-  
-  return {
-    chest: Math.round((88 + Math.random() * 20) * baseRatio * 10) / 10,
-    waist: Math.round((75 + Math.random() * 15) * baseRatio * 10) / 10,
-    hips: Math.round((95 + Math.random() * 15) * baseRatio * 10) / 10,
-    shoulder_width: Math.round((42 + Math.random() * 8) * baseRatio * 10) / 10,
-    arm_length: Math.round((58 + Math.random() * 10) * baseRatio * 10) / 10,
-    inseam: Math.round((75 + Math.random() * 15) * baseRatio * 10) / 10
-  };
-}
-
-function recommendSize(measurements) {
-  const { chest, waist, hips } = measurements;
-  const avgMeasurement = (chest + waist + hips) / 3;
-  
-  if (avgMeasurement < 80) return 'XS';
-  if (avgMeasurement < 90) return 'S';
-  if (avgMeasurement < 100) return 'M';
-  if (avgMeasurement < 110) return 'L';
-  if (avgMeasurement < 120) return 'XL';
-  return 'XXL';
-}
+// Measurement (computer vision) is done by the Flask/MediaPipe service in app.py.
+const MEASURE_SERVICE_URL = process.env.MEASURE_SERVICE_URL || 'http://127.0.0.1:5001';
 
 // Routes
 
@@ -138,45 +92,26 @@ app.get('/api/users/:id', (req, res) => {
   });
 });
 
-// Process measurement (mock implementation)
-app.post('/api/measure', (req, res) => {
+// Process measurement: forwards to the Flask pose-detection service
+app.post('/api/measure', async (req, res) => {
+  const { images, height } = req.body || {};
+  if (!images || !Array.isArray(images) || images.length === 0) {
+    return res.status(400).json({ error: 'At least one image is required' });
+  }
+
   try {
-    const { images, height } = req.body;
-    
-    if (!images || !Array.isArray(images) || images.length === 0) {
-      return res.status(400).json({ error: 'At least one image is required' });
-    }
-
-    // Simulate processing delay
-    setTimeout(() => {
-      const allMeasurements = images.map(() => calculateMockMeasurements(height || 170));
-      
-      const avgMeasurements = allMeasurements.reduce((acc, curr) => {
-        for (const key in curr) {
-          acc[key] = (acc[key] || 0) + curr[key];
-        }
-        return acc;
-      }, {});
-
-      for (const key in avgMeasurements) {
-        avgMeasurements[key] = Math.round((avgMeasurements[key] / images.length) * 10) / 10;
-      }
-
-      const recommendedSize = recommendSize(avgMeasurements);
-      
-      res.json({
-        measurements: {
-          ...avgMeasurements,
-          recommended_size: recommendedSize
-        },
-        landmarks_detected: true,
-        note: `This is a demo using mock measurements from ${images.length} images. In production, this would use AI computer vision.`
-      });
-    }, 2000); // 2 second delay to simulate processing
-    
+    const upstream = await fetch(`${MEASURE_SERVICE_URL}/api/measure`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ images, height })
+    });
+    const body = await upstream.json().catch(() => ({ error: 'Invalid response from measurement service' }));
+    res.status(upstream.status).json(body);
   } catch (error) {
-    console.error('Error processing measurement:', error);
-    res.status(500).json({ error: 'Failed to process measurement' });
+    console.error('Measurement service unavailable:', error.message);
+    res.status(503).json({
+      error: 'Measurement service is unavailable. Start it with: python app.py'
+    });
   }
 });
 
