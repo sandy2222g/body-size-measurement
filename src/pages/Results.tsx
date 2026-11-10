@@ -7,6 +7,7 @@ import {
   ShoppingBag, 
   Download, 
   Share2, 
+  Save,
   ArrowLeft,
   CheckCircle,
   Eye,
@@ -19,6 +20,8 @@ const Results: React.FC = () => {
   const { currentMeasurement } = useMeasurement();
   const navigate = useNavigate();
   const [showAnnotatedImage, setShowAnnotatedImage] = useState(false);
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   if (!currentMeasurement) {
     return (
@@ -71,6 +74,44 @@ const Results: React.FC = () => {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  };
+
+  const getSavedUserId = (): number | null => {
+    try {
+      const id = JSON.parse(localStorage.getItem('userProfile') || 'null')?.id;
+      return typeof id === 'number' ? id : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const handleSave = async () => {
+    const userId = getSavedUserId();
+    if (userId === null) {
+      navigate('/profile');
+      return;
+    }
+    setSaveState('saving');
+    setSaveError(null);
+    try {
+      const { chest, waist, hips, shoulder_width, arm_length, inseam, recommended_size } = currentMeasurement;
+      const response = await fetch('/api/measurements', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: userId,
+          measurements: { chest, waist, hips, shoulder_width, arm_length, inseam, recommended_size }
+        })
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to save measurement');
+      }
+      setSaveState('saved');
+    } catch (error) {
+      setSaveState('idle');
+      setSaveError(error instanceof Error ? error.message : 'Failed to save measurement');
+    }
   };
 
   const handleShare = async () => {
@@ -232,6 +273,20 @@ const Results: React.FC = () => {
               Take Another
             </button>
             <button
+              onClick={handleSave}
+              disabled={saveState !== 'idle'}
+              className="btn-primary flex items-center"
+            >
+              <Save className="mr-2" size={20} />
+              {saveState === 'saved'
+                ? 'Saved to Profile'
+                : saveState === 'saving'
+                  ? 'Saving...'
+                  : getSavedUserId() === null
+                    ? 'Create Profile to Save'
+                    : 'Save to Profile'}
+            </button>
+            <button
               onClick={handleDownload}
               className="btn-secondary flex items-center"
             >
@@ -246,6 +301,7 @@ const Results: React.FC = () => {
               Share Results
             </button>
           </motion.div>
+          {saveError && <p className="mt-3 text-red-700">{saveError}</p>}
         </div>
 
         {/* Size Recommendation & Info */}
