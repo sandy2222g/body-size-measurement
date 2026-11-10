@@ -1,7 +1,5 @@
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
-from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy.exc import IntegrityError
 import cv2
 import mediapipe as mp
 import numpy as np
@@ -9,16 +7,10 @@ import base64
 import io
 from PIL import Image
 import math
-from datetime import datetime
 import os
 
 app = Flask(__name__)
 CORS(app)
-
-# Database configuration
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///measurements.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-db = SQLAlchemy(app)
 
 # Enhanced MediaPipe setup for maximum accuracy
 mp_pose = mp.solutions.pose
@@ -33,27 +25,6 @@ pose = mp_pose.Pose(
     min_detection_confidence=0.8,  # Higher confidence threshold
     min_tracking_confidence=0.7
 )
-
-# Database Models
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
-    email = db.Column(db.String(100), unique=True, nullable=False)
-    height = db.Column(db.Float)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    measurements = db.relationship('Measurement', backref='user', lazy=True)
-
-class Measurement(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    chest = db.Column(db.Float)
-    waist = db.Column(db.Float)
-    hips = db.Column(db.Float)
-    shoulder_width = db.Column(db.Float)
-    arm_length = db.Column(db.Float)
-    inseam = db.Column(db.Float)
-    recommended_size = db.Column(db.String(10))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 def preprocess_image(image_cv):
     """Enhanced image preprocessing for better pose detection"""
@@ -179,8 +150,9 @@ def get_body_measurements_enhanced(landmarks, image_width, image_height, height_
         left_ankle_y = landmarks[mp_pose.PoseLandmark.LEFT_ANKLE].y * image_height
         right_ankle_y = landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE].y * image_height
         avg_ankle_y = (left_ankle_y + right_ankle_y) / 2
+        # Nose-to-ankle spans roughly 90% of standing height (top of head and sole are excluded).
         body_height_pixels = abs(avg_ankle_y - head_y)
-        height_reference_points.append(body_height_pixels)
+        height_reference_points.append(body_height_pixels / NOSE_TO_ANKLE_RATIO)
     except (IndexError, AttributeError):
         pass
     
@@ -193,8 +165,8 @@ def get_body_measurements_enhanced(landmarks, image_width, image_height, height_
         right_ankle_y = landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE].y * image_height
         avg_ankle_y = (left_ankle_y + right_ankle_y) / 2
         leg_length_pixels = abs(avg_ankle_y - avg_hip_y)
-        # Leg length is typically 45-50% of total height
-        estimated_body_height = leg_length_pixels / 0.47
+        # Hip joint to ankle is roughly 49% of standing height
+        estimated_body_height = leg_length_pixels / HIP_TO_ANKLE_RATIO
         height_reference_points.append(estimated_body_height)
     except (IndexError, AttributeError):
         pass
@@ -372,31 +344,19 @@ def recommend_size_enhanced(measurements):
 def index():
     return render_template('index.html')
 
-@app.route('/api/users', methods=['POST'])
-def create_user():
-    data = request.get_json(silent=True) or {}
-    name, email = data.get('name'), data.get('email')
-    if not name or not email:
-        return jsonify({'error': 'Name and email are required'}), 400
-    user = User(name=name, email=email, height=data.get('height'))
-    db.session.add(user)
-    try:
-        db.session.commit()
-    except IntegrityError:
-        db.session.rollback()
-        return jsonify({'error': 'Email already exists'}), 400
-    return jsonify({'id': user.id, 'message': 'User created successfully'})
+NOSE_TO_ANKLE_RATIO = 0.90
+HIP_TO_ANKLE_RATIO = 0.49
 
-@app.route('/api/users/<int:user_id>', methods=['GET'])
-def get_user(user_id):
-    user = db.get_or_404(User, user_id)
-    return jsonify({
-        'id': user.id,
-        'name': user.name,
-        'email': user.email,
-        'height': user.height,
-        'created_at': user.created_at.isoformat()
-    })
+# Plausible adult ranges (cm). Results outside them mean the pose was not a straight,
+# frontal, full-body shot, so no size is returned rather than a misleading one.
+PLAUSIBLE_RANGES = {
+    'chest': (65, 160), 'waist': (50, 150), 'hips': (70, 170),
+    'shoulder_width': (30, 60), 'arm_length': (45, 85), 'inseam': (60, 105),
+}
+IMPLAUSIBLE_MESSAGE = (
+    'The measurements from this photo look unrealistic. Please retake it standing straight, '
+    'facing the camera, full body in frame (head to feet), arms slightly away from your body.'
+)
 
 MEASURE_KEYS = ['chest', 'waist', 'hips', 'shoulder_width', 'arm_length', 'inseam']
 MAX_IMAGES = 3
@@ -439,6 +399,9 @@ def measure_image(image_cv, user_height):
     measurements = get_body_measurements_enhanced(
         results.pose_landmarks.landmark, width, height, user_height
     )
+    for key, (low, high) in PLAUSIBLE_RANGES.items():
+        if not low <= measurements[key] <= high:
+            raise ImageError(IMPLAUSIBLE_MESSAGE)
 
     annotated = image_cv.copy()
     mp_drawing.draw_landmarks(
@@ -527,41 +490,7 @@ def process_measurement():
         return jsonify({'error': 'Internal server error. Please try again.'}), 500
 
 
-@app.route('/api/measurements', methods=['POST'])
-def save_measurement():
-    data = request.get_json(silent=True) or {}
-    m = data.get('measurements')
-    if not data.get('user_id') or not isinstance(m, dict):
-        return jsonify({'error': 'User ID and measurements are required'}), 400
-    if db.session.get(User, data['user_id']) is None:
-        return jsonify({'error': 'User not found'}), 404
-    measurement = Measurement(
-        user_id=data['user_id'],
-        recommended_size=m.get('recommended_size'),
-        **{k: m.get(k) for k in MEASURE_KEYS}
-    )
-    db.session.add(measurement)
-    db.session.commit()
-    return jsonify({'id': measurement.id, 'message': 'Measurement saved successfully'})
-
-@app.route('/api/measurements/<int:user_id>', methods=['GET'])
-def get_user_measurements(user_id):
-    measurements = Measurement.query.filter_by(user_id=user_id).order_by(Measurement.created_at.desc()).all()
-    return jsonify([{
-        'id': m.id,
-        'chest': m.chest,
-        'waist': m.waist,
-        'hips': m.hips,
-        'shoulder_width': m.shoulder_width,
-        'arm_length': m.arm_length,
-        'inseam': m.inseam,
-        'recommended_size': m.recommended_size,
-        'created_at': m.created_at.isoformat()
-    } for m in measurements])
-
 if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
     app.run(
         debug=os.environ.get('FLASK_DEBUG') == '1',
         host=os.environ.get('HOST', '127.0.0.1'),

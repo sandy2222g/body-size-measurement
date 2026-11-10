@@ -15,7 +15,9 @@ to a profile to track over time.
 - **Manual entry** – tape-measure input with range validation (no photo / camera needed).
 - **Size engine** (`src/lib/sizing.ts`) – pure, unit-tested TypeScript: weighted chart matching, fit ease, between-size detection, out-of-chart warnings.
 - **Bra sizing** – band estimate from bust; cup size once an underbust is entered.
-- **Profile & history** – save results to a profile (Express + SQLite).
+- **Brand chart check** – paste any product's size chart and get your size in it (no brand data is invented).
+- **Profile & history** – save results to a profile (Express + SQLite, single source of truth).
+- **Plausibility guard** – photos that don't look like a straight full-body pose are rejected instead of returning a made-up size.
 - **CI** – type-check, unit tests, build, and backend tests on every push.
 
 ## Architecture
@@ -29,8 +31,8 @@ React + Vite + Tailwind (src/)  ──/api──▶  Express gateway (server.cjs
 ## Run
 ```bash
 npm ci
-pip install -r requirements.txt   # needs a Python version supported by the pinned mediapipe
-python app.py                     # measurement service :5001 (PORT / HOST / FLASK_DEBUG)
+pip install -r requirements.txt   # use Python 3.9-3.11 (verified on 3.11); pinned mediapipe has no 3.12+ wheels
+python app.py                     # stateless measurement service :5001 (PORT / HOST / FLASK_DEBUG)
 npm run server                    # gateway :5000 (MEASURE_SERVICE_URL)
 npm run dev                       # frontend
 ```
@@ -39,10 +41,11 @@ Manual entry and the size guide work without the Python service.
 ## Test
 ```bash
 npm run typecheck && npm test && npx vite build
-python -m unittest discover -s tests      # MediaPipe is faked
+python -m unittest discover -s tests      # MediaPipe is faked; Node tests cover the gateway
 ```
 
 ## Limitations (honest)
 - Photo-based circumferences are estimated from 2D widths; accuracy has **not** been validated against ground truth. Prefer manual entry for fitted garments.
 - Size charts are generic, not brand-specific. Cup size needs a manual underbust.
-- The pinned Python dependencies need an older Python than 3.13.
+- The real pose pipeline was smoke-tested on a handful of public sample photos (it runs; implausible poses are rejected), but accuracy has not been benchmarked against tape measurements.
+- Chest/hip circumference use fixed ratios from 2D widths.

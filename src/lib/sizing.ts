@@ -171,18 +171,25 @@ export function isValidBody(body: Partial<BodyMeasurements> | null | undefined):
     .every((k) => typeof body[k] === 'number' && Number.isFinite(body[k]) && (body[k] as number) > 0);
 }
 
-export function recommendSize(
-  garment: Garment,
-  body: BodyMeasurements,
-  gender: Gender,
-  fit: Fit = 'regular',
-): SizeResult | null {
-  const chart = garment.charts[gender];
-  if (!chart || !garment.genders.includes(gender)) return null;
+interface MatchOutcome {
+  size: string;
+  alternate: string | null;
+  between: boolean;
+  outOfRange: boolean;
+  confidence: number;
+  note: string;
+}
 
+function matchChart(
+  chart: SizeRow[],
+  weights: Partial<Record<MeasureKey, number>>,
+  body: BodyMeasurements,
+  fit: Fit,
+): MatchOutcome | null {
   const ease = EASE_CM[fit];
-  const keys = Object.keys(garment.weights) as MeasureKey[];
-  const totalWeight = keys.reduce((s, k) => s + (garment.weights[k] ?? 0), 0);
+  const keys = (Object.keys(weights) as MeasureKey[]).filter((k) => chart.some((row) => row[k]));
+  const totalWeight = keys.reduce((s, k) => s + (weights[k] ?? 0), 0);
+  if (chart.length === 0 || totalWeight === 0) return null;
 
   const scored = chart.map((row) => {
     let penalty = 0;
@@ -190,7 +197,7 @@ export function recommendSize(
     for (const k of keys) {
       const range = row[k];
       if (!range) continue;
-      const w = garment.weights[k] ?? 0;
+      const w = weights[k] ?? 0;
       const v = body[k] + ease;
       penalty += w * rangeDistance(v, range);
       tieBreak += w * centerDistance(v, range) * 0.01;
@@ -209,16 +216,65 @@ export function recommendSize(
   else if (between && second) note = `Between ${best.label} and ${second.label}: choose ${best.label} for a closer fit or ${second.label} for more room.`;
   else note = `${best.label} fits your measurements well.`;
 
+  return { size: best.label, alternate: between && second ? second.label : null, between, outOfRange, confidence, note };
+}
+
+export function recommendSize(
+  garment: Garment,
+  body: BodyMeasurements,
+  gender: Gender,
+  fit: Fit = 'regular',
+): SizeResult | null {
+  const chart = garment.charts[gender];
+  if (!chart || !garment.genders.includes(gender)) return null;
+  const outcome = matchChart(chart, garment.weights, body, fit);
+  if (!outcome) return null;
   return {
     garment,
-    size: best.label,
-    alternate: between && second ? second.label : null,
-    between,
-    outOfRange,
-    confidence,
+    ...outcome,
     length: garment.length ? lengthCategory(garment.length, body) : null,
-    note,
   };
+}
+
+// ------------------------------------------------------- Custom (brand) chart
+
+/**
+ * Parse a pasted size chart. One size per line: `label chest waist hips`,
+ * where each value is `min-max` (cm) or `-` when the brand does not list it.
+ * Single numbers are accepted and treated as +/- 2 cm. Returns the rows plus
+ * any lines that could not be understood.
+ */
+export function parseCustomChart(text: string): { rows: SizeRow[]; errors: string[] } {
+  const rows: SizeRow[] = [];
+  const errors: string[] = [];
+  const parseRange = (token: string | undefined): Range | undefined | null => {
+    if (token === undefined || token === '-' || token === '') return undefined;
+    const m = token.match(/^(\d+(?:\.\d+)?)(?:\s*[-–]\s*(\d+(?:\.\d+)?))?$/);
+    if (!m) return null;
+    const lo = Number(m[1]);
+    const hi = m[2] !== undefined ? Number(m[2]) : lo + 2;
+    const range: Range = m[2] !== undefined ? [lo, hi] : [lo - 2, lo + 2];
+    return range[0] <= range[1] && range[0] > 20 && range[1] < 250 ? range : null;
+  };
+  text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).forEach((line, i) => {
+    const tokens = line.split(/[\s,;]+/);
+    const [label, ...vals] = tokens;
+    const ranges = vals.slice(0, 3).map(parseRange);
+    if (!label || ranges.length === 0 || ranges.some((r) => r === null) || ranges.every((r) => r === undefined)) {
+      errors.push(`Line ${i + 1}: expected "label chest waist hips" with ranges like 94-102 (use - to skip).`);
+      return;
+    }
+    rows.push({ label, chest: ranges[0] ?? undefined, waist: ranges[1] ?? undefined, hips: ranges[2] ?? undefined });
+  });
+  return { rows, errors };
+}
+
+export function recommendFromCustomChart(
+  rows: SizeRow[],
+  body: BodyMeasurements,
+  fit: Fit = 'regular',
+): Omit<SizeResult, 'garment' | 'length'> | null {
+  return matchChart(rows, { chest: 3, waist: 1.5, hips: 1 }, body, fit);
 }
 
 export function recommendBundle(

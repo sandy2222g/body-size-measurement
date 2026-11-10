@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Copy, FileDown, Info } from 'lucide-react';
 import {
-  BUNDLES, bundleToCsv, bundleToText, isValidBody, recommendBra, recommendBundle,
+  BUNDLES, bundleToCsv, parseCustomChart, recommendFromCustomChart, bundleToText, isValidBody, recommendBra, recommendBundle,
   type BodyMeasurements, type Fit, type Gender,
 } from '../lib/sizing';
 
@@ -17,10 +17,16 @@ const SizeGuide: React.FC<Props> = ({ body, gender, fit, onUnderbustChange }) =>
   const bundles = BUNDLES.filter((b) => !b.includesBra || gender === 'female');
   const [bundleId, setBundleId] = useState(bundles[0].id);
   const [copied, setCopied] = useState(false);
+  const [chartText, setChartText] = useState('');
   const bundle = bundles.find((b) => b.id === bundleId) ?? bundles[0];
 
   const valid = isValidBody(body);
   const results = useMemo(() => (valid ? recommendBundle(bundle, body, gender, fit) : []), [valid, bundle, body, gender, fit]);
+  const custom = useMemo(() => {
+    if (!valid || !chartText.trim()) return null;
+    const { rows, errors } = parseCustomChart(chartText);
+    return { errors, result: rows.length ? recommendFromCustomChart(rows, body, fit) : null };
+  }, [valid, chartText, body, fit]);
   const bra = valid && bundle.includesBra ? recommendBra(body) : null;
 
   const copyText = async () => {
@@ -133,6 +139,33 @@ const SizeGuide: React.FC<Props> = ({ body, gender, fit, onUnderbustChange }) =>
               placeholder="e.g. 78"
             />
           </div>
+        )}
+      </div>
+
+      <div className="mt-8 border-t border-gray-100 pt-6" data-testid="custom-chart">
+        <h3 className="text-lg font-semibold mb-1">Check a specific brand's size chart</h3>
+        <p className="text-sm text-gray-600 mb-3">
+          Paste the size chart from the product page, one size per line: <code>label chest waist hips</code> in cm,
+          e.g. <code>M 94-102 78-86 -</code> (use <code>-</code> for a column the brand doesn't list).
+        </p>
+        <label htmlFor="brand-chart" className="sr-only">Brand size chart</label>
+        <textarea
+          id="brand-chart"
+          value={chartText}
+          onChange={(e) => setChartText(e.target.value)}
+          rows={5}
+          className="input-field font-mono text-sm"
+          placeholder={'S 84-90 66-72 -\nM 90-98 72-80 96-104\nL 98-106 80-88 104-112'}
+        />
+        {custom?.errors.map((err) => (
+          <p key={err} className="text-sm text-red-700 mt-2">{err}</p>
+        ))}
+        {custom?.result && (
+          <p className="mt-3 text-gray-800" data-testid="custom-result">
+            Your size in this chart: <strong className="text-2xl text-primary-600">{custom.result.size}</strong>
+            {custom.result.alternate && <> (or {custom.result.alternate})</>}
+            <span className="block text-sm text-gray-600">{custom.result.note}</span>
+          </p>
         )}
       </div>
 

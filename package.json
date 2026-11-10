@@ -10,7 +10,7 @@
     "server": "node server.cjs",
     "install-deps": "npm install",
     "typecheck": "tsc -p .",
-    "test": "node --test tests/sizing.test.ts"
+    "test": "node --test tests/sizing.test.ts tests/server.test.mjs"
   },
   "dependencies": {
     "react": "^18.2.0",

@@ -11,7 +11,7 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Initialize SQLite database
-const db = new sqlite3.Database('./measurements.db');
+const db = new sqlite3.Database(process.env.DB_PATH || './measurements.db');
 
 // Create tables
 db.serialize(() => {
@@ -133,6 +133,17 @@ app.post('/api/measurements', (req, res) => {
     recommended_size
   } = measurements;
 
+  db.get('SELECT id FROM users WHERE id = ?', [user_id], (lookupErr, user) => {
+    if (lookupErr) {
+      return res.status(500).json({ error: 'Database error' });
+    }
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    saveMeasurement();
+  });
+
+  function saveMeasurement() {
   const stmt = db.prepare(`
     INSERT INTO measurements 
     (user_id, chest, waist, hips, shoulder_width, arm_length, inseam, recommended_size) 
@@ -161,6 +172,7 @@ app.post('/api/measurements', (req, res) => {
   });
   
   stmt.finalize();
+  }
 });
 
 // Get user measurements

@@ -30,7 +30,7 @@ class PoseLandmark(enum.IntEnum):
     RIGHT_ANKLE = 28
 
 
-def make_landmarks(shoulder_half=0.12):
+def make_landmarks(shoulder_half=0.148):
     lm = [SimpleNamespace(x=0.5, y=0.5, visibility=0.99) for _ in range(33)]
     def put(p, x, y):
         lm[p] = SimpleNamespace(x=x, y=y, visibility=0.99)
@@ -41,8 +41,8 @@ def make_landmarks(shoulder_half=0.12):
     put(PoseLandmark.RIGHT_ELBOW, 0.7, 0.35)
     put(PoseLandmark.LEFT_WRIST, 0.28, 0.5)
     put(PoseLandmark.RIGHT_WRIST, 0.72, 0.5)
-    put(PoseLandmark.LEFT_HIP, 0.43, 0.5)
-    put(PoseLandmark.RIGHT_HIP, 0.57, 0.5)
+    put(PoseLandmark.LEFT_HIP, 0.40, 0.5)
+    put(PoseLandmark.RIGHT_HIP, 0.60, 0.5)
     put(PoseLandmark.LEFT_KNEE, 0.43, 0.7)
     put(PoseLandmark.RIGHT_KNEE, 0.57, 0.7)
     put(PoseLandmark.LEFT_ANKLE, 0.43, 0.95)
@@ -84,19 +84,9 @@ def data_url(w=600, h=800):
 
 class ApiTests(unittest.TestCase):
     def setUp(self):
-        backend.app.config.update(TESTING=True, SQLALCHEMY_DATABASE_URI='sqlite://')
-        with backend.app.app_context():
-            backend.db.engine.dispose()
-        self.ctx = backend.app.app_context()
-        self.ctx.push()
-        backend.db.drop_all()
-        backend.db.create_all()
+        backend.app.config.update(TESTING=True)
         self.client = backend.app.test_client()
         FakePose.next_landmarks = make_landmarks()
-
-    def tearDown(self):
-        backend.db.session.remove()
-        self.ctx.pop()
 
     def test_health(self):
         self.assertEqual(self.client.get('/api/health').status_code, 200)
@@ -116,6 +106,17 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(r.status_code, 400)
         r = self.client.post('/api/measure', json={'images': [data_url(100, 100)], 'height': 170})
         self.assertIn('resolution', r.get_json()['error'])
+
+    def test_implausible_pose_is_rejected(self):
+        FakePose.next_landmarks = make_landmarks(shoulder_half=0.04)  # ~10 cm shoulders
+        r = self.client.post('/api/measure', json={'images': [data_url()], 'height': 175})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('unrealistic', r.get_json()['error'])
+
+    def test_scale_uses_stature_not_nose_to_ankle(self):
+        # nose->ankle is 0.87 of an 800px image = 696px; stature ~ 696/0.9 => 175cm/773px
+        m, _ = backend.measure_image(backend.decode_image(data_url()), 175)
+        self.assertAlmostEqual(m['pixel_to_cm_ratio'], 175 / (696 / 0.9), delta=0.02)
 
     def test_measure_too_many_images(self):
         r = self.client.post('/api/measure', json={'images': [data_url()] * 4, 'height': 170})
@@ -139,21 +140,6 @@ class ApiTests(unittest.TestCase):
         # deterministic: same landmarks => same result as single legacy call
         r2 = self.client.post('/api/measure', json={'image': data_url(), 'height': 175})
         self.assertEqual(r2.get_json()['measurements'], m)
-
-    def test_user_and_measurement_roundtrip(self):
-        r = self.client.post('/api/users', json={'name': 'A', 'email': 'a@x.com', 'height': 170})
-        uid = r.get_json()['id']
-        self.assertEqual(self.client.post('/api/users', json={'name': 'B', 'email': 'a@x.com'}).status_code, 400)
-        self.assertEqual(self.client.post('/api/users', json={'name': 'B'}).status_code, 400)
-        self.assertEqual(self.client.get('/api/users/999').status_code, 404)
-        meas = {k: 1.0 for k in backend.MEASURE_KEYS}
-        meas['recommended_size'] = 'M'
-        self.assertEqual(self.client.post('/api/measurements', json={'user_id': uid, 'measurements': meas}).status_code, 200)
-        self.assertEqual(self.client.post('/api/measurements', json={'user_id': 999, 'measurements': meas}).status_code, 404)
-        self.assertEqual(self.client.post('/api/measurements', json={}).status_code, 400)
-        rows = self.client.get(f'/api/measurements/{uid}').get_json()
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]['recommended_size'], 'M')
 
     def test_size_recommendation(self):
         size, conf = backend.recommend_size_enhanced({'chest': 98, 'waist': 82, 'hips': 107})

@@ -102,3 +102,22 @@ test('isValidBody', () => {
   assert.equal(isValidBody({ ...body(), chest: NaN }), false);
   assert.equal(isValidBody(null), false);
 });
+
+import { parseCustomChart, recommendFromCustomChart } from '../src/lib/sizing.ts';
+
+test('custom chart parsing and matching', () => {
+  const { rows, errors } = parseCustomChart('S 84-90 66-72 -\nM 90-98 72-80 96-104\nL 98-106 80-88 104-112');
+  assert.deepEqual(errors, []);
+  assert.equal(rows.length, 3);
+  assert.equal(rows[0].hips, undefined);
+  assert.equal(recommendFromCustomChart(rows, body())!.size, 'M');
+  assert.equal(recommendFromCustomChart(rows, body({ chest: 104, waist: 86, hips: 110 }))!.size, 'L');
+});
+
+test('custom chart reports bad lines and single values', () => {
+  const bad = parseCustomChart('M ninety 80\n\nL 100 - -');
+  assert.equal(bad.errors.length, 1);
+  assert.deepEqual(bad.rows[0].chest, [98, 102]);
+  assert.equal(parseCustomChart('').rows.length, 0);
+  assert.equal(recommendFromCustomChart([], body()), null);
+});
