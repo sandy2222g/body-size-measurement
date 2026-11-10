@@ -15,6 +15,7 @@ to a profile to track over time.
 - **Manual entry** – tape-measure input with range validation (no photo / camera needed).
 - **Size engine** (`src/lib/sizing.ts`) – pure, unit-tested TypeScript: weighted chart matching, fit ease, between-size detection, out-of-chart warnings.
 - **Bra sizing** – band estimate from bust; cup size once an underbust is entered.
+- **Per-user calibration** – enter tape-measured chest/waist/hips once; correction factors (stored in the browser, clamped 0.7–1.4) are applied to future photo results, addressing the fixed-ratio circumference estimates.
 - **Brand chart check** – paste any product's size chart and get your size in it (no brand data is invented).
 - **Profile & history** – save results to a profile (Express + SQLite, single source of truth).
 - **Plausibility guard** – photos that don't look like a straight full-body pose are rejected instead of returning a made-up size.
@@ -56,4 +57,4 @@ No benchmark results are published yet — add your own tape-measured photos and
 - Photo-based circumferences are estimated from 2D widths; accuracy has **not** been validated against ground truth. Prefer manual entry for fitted garments.
 - Size charts are generic, not brand-specific. Cup size needs a manual underbust.
 - The real pose pipeline was smoke-tested on a handful of public sample photos (it runs; implausible poses are rejected), but accuracy has not been benchmarked against tape measurements.
-- Chest/hip circumference use fixed ratios from 2D widths.
+- Chest/waist/hip circumference use fixed ratios from 2D widths; per-user calibration compensates for one person but does not fix the general model.

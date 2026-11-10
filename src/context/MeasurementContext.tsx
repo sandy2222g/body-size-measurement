@@ -14,6 +14,8 @@ interface Measurements {
   processing_notes?: string;
   underbust?: number;
   source?: 'photo' | 'manual';
+  /** Uncalibrated photo estimate, used to learn calibration factors. */
+  raw_estimate?: { chest: number; waist: number; hips: number };
 }
 
 export interface SizingPreferences {

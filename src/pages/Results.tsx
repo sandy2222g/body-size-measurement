@@ -3,6 +3,8 @@ import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { useMeasurement } from '../context/MeasurementContext';
 import SizeGuide from '../components/SizeGuide';
+import CalibrationPanel from '../components/CalibrationPanel';
+import { applyCalibration } from '../lib/calibration';
 import { GARMENTS } from '../lib/sizing';
 import { 
   Ruler, 
@@ -376,6 +378,15 @@ const Results: React.FC = () => {
           </motion.div>
         </div>
       </div>
+      {currentMeasurement.source === 'photo' && currentMeasurement.raw_estimate && (
+        <CalibrationPanel
+          raw={currentMeasurement.raw_estimate}
+          onChange={(factors) => setMeasurements({
+            ...currentMeasurement,
+            ...applyCalibration(currentMeasurement.raw_estimate!, factors),
+          })}
+        />
+      )}
       <SizeGuide
         body={currentMeasurement}
         gender={preferences.gender}

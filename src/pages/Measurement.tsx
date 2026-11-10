@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { Camera, Upload, User, Ruler, AlertCircle, CheckCircle, Info } from 'lucide-react';
 import { useMeasurement } from '../context/MeasurementContext';
 import { useNavigate } from 'react-router-dom';
+import { applyCalibration, loadCalibration } from '../lib/calibration';
 import { GARMENTS, recommendSize, type Fit, type Gender } from '../lib/sizing';
 
 const Measurement: React.FC = () => {
@@ -147,8 +148,11 @@ const Measurement: React.FC = () => {
       if (response.ok) {
         setProcessingStep('Calculating measurements...');
         timersRef.current.push(window.setTimeout(() => {
+          // Keep the raw estimate so Results can offer calibration against a tape measure.
+          const calibrated = applyCalibration(data.measurements, loadCalibration());
           setMeasurements({
-            ...data.measurements,
+            ...calibrated,
+            raw_estimate: { chest: data.measurements.chest, waist: data.measurements.waist, hips: data.measurements.hips },
             annotated_image: data.annotated_image,
             confidence_score: data.confidence_score,
             processing_notes: data.processing_notes,

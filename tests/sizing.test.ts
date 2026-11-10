@@ -121,3 +121,25 @@ test('custom chart reports bad lines and single values', () => {
   assert.equal(parseCustomChart('').rows.length, 0);
   assert.equal(recommendFromCustomChart([], body()), null);
 });
+
+import { computeCalibration, applyCalibration } from '../src/lib/calibration.ts';
+
+test('calibration learns factors and applies them', () => {
+  const est = { chest: 90, waist: 70, hips: 90 };
+  const cal = computeCalibration(est, { chest: 99, waist: 70 });
+  assert.equal(cal.chest, 1.1);
+  assert.equal(cal.waist, 1);
+  assert.equal(cal.hips, undefined);
+  const next = applyCalibration({ chest: 100, waist: 80, hips: 95, extra: 1 }, cal);
+  assert.equal(next.chest, 110);
+  assert.equal(next.waist, 80);
+  assert.equal(next.hips, 95);
+  assert.equal(next.extra, 1);
+});
+
+test('calibration clamps absurd factors and ignores invalid input', () => {
+  const cal = computeCalibration({ chest: 90, waist: 70, hips: 90 }, { chest: 900, waist: NaN, hips: -5 });
+  assert.equal(cal.chest, 1.4);
+  assert.equal(cal.waist, undefined);
+  assert.equal(cal.hips, undefined);
+});
